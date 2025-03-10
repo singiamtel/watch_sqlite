@@ -17,6 +17,40 @@ const __dirname = dirname(__filename);
 const PORT = process.env.PORT || 4000;
 const DEFAULT_DB_PATH = process.env.DB_PATH || path.join(__dirname, '../database.sqlite');
 
+// Function to find an available port
+const findAvailablePort = (startPort: number, maxAttempts = 10): Promise<number> => {
+  return new Promise((resolve, reject) => {
+    let currentPort = startPort;
+    let attempts = 0;
+    
+    const tryPort = () => {
+      if (attempts >= maxAttempts) {
+        return reject(new Error(`Could not find an available port after ${maxAttempts} attempts`));
+      }
+      
+      const testServer = http.createServer();
+      testServer.once('error', (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+          console.log(`Port ${currentPort} is in use, trying another one...`);
+          currentPort++;
+          attempts++;
+          testServer.close(() => tryPort());
+        } else {
+          reject(err);
+        }
+      });
+      
+      testServer.once('listening', () => {
+        testServer.close(() => resolve(currentPort));
+      });
+      
+      testServer.listen(currentPort);
+    };
+    
+    tryPort();
+  });
+};
+
 // Initialize Express app
 const app = express();
 app.use(cors());
@@ -30,7 +64,10 @@ const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
-  }
+  },
+  // Add additional configuration for better connection handling
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // Database connection and watcher
@@ -207,62 +244,73 @@ function getTableData(tableName: string, limit = 100) {
   };
 }
 
-// Socket.IO connection handler
-io.on('connection', (socket) => {
-  console.log('Client connected');
-  
-  // Send current database path when client connects
-  socket.emit('databasePath', currentDbPath);
-  
-  // Handle database path change request
-  socket.on('changeDatabase', (dbPath, callback) => {
-    try {
-      // Resolve relative paths if needed
-      const resolvedPath = path.isAbsolute(dbPath) ? dbPath : path.resolve(process.cwd(), dbPath);
-      
-      const success = connectToDatabase(resolvedPath);
-      
-      if (success) {
-        io.emit('databaseChanged');
-        io.emit('databasePathChanged', resolvedPath);
-        callback?.({ success: true, path: resolvedPath });
-      } else {
-        callback?.({ success: false, message: 'Failed to connect to database' });
-      }
-    } catch (error) {
-      console.error('Error changing database:', error);
-      callback?.({ success: false, message: String(error) });
-    }
-  });
-  
-  // Send list of tables when requested
-  socket.on('getTables', () => {
-    try {
-      const tables = getTables();
-      socket.emit('tables', tables);
-    } catch (error) {
-      console.error('Error getting tables:', error);
-      socket.emit('error', 'Failed to get tables from database');
-    }
-  });
-  
-  // Send table data when requested
-  socket.on('getTableData', (tableName) => {
-    try {
-      const data = getTableData(tableName);
-      socket.emit('tableData', data);
-    } catch (error) {
-      console.error(`Error getting data from table ${tableName}:`, error);
-      socket.emit('error', `Failed to get data from table ${tableName}`);
-    }
-  });
-  
-  socket.on('disconnect', () => {
-    console.log('Client disconnected');
-  });
-});
-
 // Start the server
-server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-}); 
+const startServer = async () => {
+  try {
+    const availablePort = await findAvailablePort(Number(PORT));
+    server.listen(availablePort, () => {
+      console.log(`Server running on http://localhost:${availablePort}`);
+      
+      // Store the current port for socket connections
+      io.on('connection', (socket) => {
+        console.log('Client connected');
+        
+        // Send current port and database path when client connects
+        socket.emit('serverPort', availablePort);
+        socket.emit('databasePath', currentDbPath);
+        
+        // Handle database path change request
+        socket.on('changeDatabase', (dbPath, callback) => {
+          try {
+            // Resolve relative paths if needed
+            const resolvedPath = path.isAbsolute(dbPath) ? dbPath : path.resolve(process.cwd(), dbPath);
+            
+            const success = connectToDatabase(resolvedPath);
+            
+            if (success) {
+              io.emit('databaseChanged');
+              io.emit('databasePathChanged', resolvedPath);
+              callback?.({ success: true, path: resolvedPath });
+            } else {
+              callback?.({ success: false, message: 'Failed to connect to database' });
+            }
+          } catch (error) {
+            console.error('Error changing database:', error);
+            callback?.({ success: false, message: String(error) });
+          }
+        });
+        
+        // Send list of tables when requested
+        socket.on('getTables', () => {
+          try {
+            const tables = getTables();
+            socket.emit('tables', tables);
+          } catch (error) {
+            console.error('Error getting tables:', error);
+            socket.emit('error', 'Failed to get tables from database');
+          }
+        });
+        
+        // Send table data when requested
+        socket.on('getTableData', (tableName) => {
+          try {
+            const data = getTableData(tableName);
+            socket.emit('tableData', data);
+          } catch (error) {
+            console.error(`Error getting data from table ${tableName}:`, error);
+            socket.emit('error', `Failed to get data from table ${tableName}`);
+          }
+        });
+        
+        socket.on('disconnect', () => {
+          console.log('Client disconnected');
+        });
+      });
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer(); 

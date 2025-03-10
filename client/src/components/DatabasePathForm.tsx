@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { motion } from 'framer-motion';
 
 interface DatabasePathFormProps {
@@ -10,6 +10,13 @@ interface DatabasePathFormProps {
 const DatabasePathForm = ({ currentPath, onSubmit, isLoading }: DatabasePathFormProps) => {
   const [path, setPath] = useState<string>(currentPath);
   const [showHelp, setShowHelp] = useState<boolean>(false);
+
+  // Update path state when currentPath prop changes
+  useEffect(() => {
+    if (currentPath) {
+      setPath(currentPath);
+    }
+  }, [currentPath]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
