@@ -9,7 +9,8 @@ A real-time SQLite database viewer with an interactive frontend built with TypeS
 - Animated table updates using Framer Motion
 - Responsive design with Tailwind CSS
 - WebSocket communication for instant updates
-- Displays the last 100 entries in each table
+- Displays the latest entries first in each table
+- **Dynamic database selection** - connect to any SQLite database on your system
 
 ## Project Structure
 
@@ -46,41 +47,52 @@ A real-time SQLite database viewer with an interactive frontend built with TypeS
 
 2. Install dependencies for both client and server:
    ```
-   # Install server dependencies
-   cd server
-   npm install
-
-   # Install client dependencies
-   cd ../client
-   npm install
+   # Install all dependencies
+   npm run install:all
    ```
 
 ### Running the Application
 
-1. Start the server:
+1. Start the application:
    ```
-   cd server
    npm run dev
    ```
 
-2. In a separate terminal, start the client:
-   ```
-   cd client
-   npm run dev
-   ```
-
-3. Open your browser and navigate to `http://localhost:3000`
+2. Open your browser and navigate to `http://localhost:3000`
 
 ## Using Your Own SQLite Database
 
-By default, the application creates a sample SQLite database with some test data. To use your own database:
+There are two ways to use your own SQLite database:
+
+### 1. Through the UI (Recommended)
+
+1. Click the "Change Database" button in the top-right corner of the application
+2. Enter the absolute path to your SQLite database file
+3. Click "Connect to Database"
+
+The application will:
+- Connect to the specified database if it exists
+- Create a new database at the specified path if it doesn't exist (the directory must exist)
+- Automatically refresh the UI to show the tables in the new database
+
+### 2. Using Environment Variables
 
 1. Set the `DB_PATH` environment variable to point to your SQLite database file:
    ```
    DB_PATH=/path/to/your/database.sqlite npm run dev
    ```
 
-2. Alternatively, you can modify the `DB_PATH` constant in `server/src/index.ts`.
+2. Alternatively, you can modify the `DEFAULT_DB_PATH` constant in `server/src/index.ts`.
+
+## Adding Test Data
+
+To add some random test data to the current database:
+
+```
+npm run add-data
+```
+
+This will add random users and products to the database, which is useful for testing the real-time update functionality.
 
 ## How It Works
 

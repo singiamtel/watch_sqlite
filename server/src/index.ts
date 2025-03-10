@@ -15,53 +15,7 @@ const __dirname = dirname(__filename);
 
 // Configuration
 const PORT = process.env.PORT || 4000;
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../database.sqlite');
-
-// Ensure database file exists
-if (!fs.existsSync(DB_PATH)) {
-  console.log(`Database file not found at ${DB_PATH}, creating a new one...`);
-  fs.writeFileSync(DB_PATH, '');
-  
-  // Create a sample table for demonstration
-  const db = new Database(DB_PATH);
-  db.exec(`
-    CREATE TABLE users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    
-    INSERT INTO users (name, email) VALUES 
-      ('John Doe', 'john@example.com'),
-      ('Jane Smith', 'jane@example.com'),
-      ('Bob Johnson', 'bob@example.com');
-      
-    CREATE TABLE products (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      price REAL NOT NULL,
-      stock INTEGER DEFAULT 0,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    
-    INSERT INTO products (name, price, stock) VALUES 
-      ('Laptop', 999.99, 10),
-      ('Smartphone', 699.99, 25),
-      ('Headphones', 149.99, 50);
-  `);
-  db.close();
-}
-
-// Initialize database connection
-let db: Database.Database;
-try {
-  db = new Database(DB_PATH);
-  console.log(`Connected to SQLite database at ${DB_PATH}`);
-} catch (error) {
-  console.error('Failed to connect to the database:', error);
-  process.exit(1);
-}
+const DEFAULT_DB_PATH = process.env.DB_PATH || path.join(__dirname, '../database.sqlite');
 
 // Initialize Express app
 const app = express();
@@ -79,13 +33,123 @@ const io = new Server(server, {
   }
 });
 
-// Initialize database watcher
-const watcher = new DatabaseWatcher(DB_PATH, () => {
-  io.emit('databaseChanged');
+// Database connection and watcher
+let db: Database.Database | null = null;
+let watcher: DatabaseWatcher | null = null;
+let currentDbPath: string = DEFAULT_DB_PATH;
+
+// Function to initialize or change the database connection
+function connectToDatabase(dbPath: string): boolean {
+  try {
+    // Close existing connections if any
+    if (db) {
+      db.close();
+    }
+    if (watcher) {
+      watcher.stopWatching();
+    }
+
+    // Ensure the directory exists
+    const dbDir = path.dirname(dbPath);
+    if (!fs.existsSync(dbDir)) {
+      throw new Error(`Directory does not exist: ${dbDir}`);
+    }
+
+    // Check if database file exists, create it if not
+    const dbExists = fs.existsSync(dbPath);
+    if (!dbExists) {
+      console.log(`Database file not found at ${dbPath}, creating a new one...`);
+      fs.writeFileSync(dbPath, '');
+      
+      // Create sample tables for new databases
+      const newDb = new Database(dbPath);
+      newDb.exec(`
+        CREATE TABLE users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT UNIQUE NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        INSERT INTO users (name, email) VALUES 
+          ('John Doe', 'john@example.com'),
+          ('Jane Smith', 'jane@example.com'),
+          ('Bob Johnson', 'bob@example.com');
+          
+        CREATE TABLE products (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          price REAL NOT NULL,
+          stock INTEGER DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+        INSERT INTO products (name, price, stock) VALUES 
+          ('Laptop', 999.99, 10),
+          ('Smartphone', 699.99, 25),
+          ('Headphones', 149.99, 50);
+      `);
+      newDb.close();
+    }
+
+    // Connect to the database
+    db = new Database(dbPath);
+    console.log(`Connected to SQLite database at ${dbPath}`);
+    
+    // Initialize database watcher
+    watcher = new DatabaseWatcher(dbPath, () => {
+      io.emit('databaseChanged');
+    });
+    
+    currentDbPath = dbPath;
+    return true;
+  } catch (error) {
+    console.error('Failed to connect to the database:', error);
+    return false;
+  }
+}
+
+// Initialize with default database
+connectToDatabase(DEFAULT_DB_PATH);
+
+// API endpoint to change database path
+app.post('/api/change-database', (req, res) => {
+  const { dbPath } = req.body;
+  
+  if (!dbPath) {
+    return res.status(400).json({ success: false, message: 'Database path is required' });
+  }
+  
+  try {
+    // Resolve relative paths if needed
+    const resolvedPath = path.isAbsolute(dbPath) ? dbPath : path.resolve(process.cwd(), dbPath);
+    
+    const success = connectToDatabase(resolvedPath);
+    
+    if (success) {
+      io.emit('databaseChanged');
+      io.emit('databasePathChanged', resolvedPath);
+      return res.json({ success: true, path: resolvedPath });
+    } else {
+      return res.status(500).json({ success: false, message: 'Failed to connect to database' });
+    }
+  } catch (error) {
+    console.error('Error changing database:', error);
+    return res.status(500).json({ success: false, message: String(error) });
+  }
+});
+
+// API endpoint to get current database path
+app.get('/api/database-path', (req, res) => {
+  res.json({ path: currentDbPath });
 });
 
 // Get all tables from the database
 function getTables(): string[] {
+  if (!db) {
+    throw new Error('No database connection');
+  }
+  
   const tables = db.prepare(`
     SELECT name FROM sqlite_master 
     WHERE type='table' AND name NOT LIKE 'sqlite_%'
@@ -96,6 +160,10 @@ function getTables(): string[] {
 
 // Get data from a specific table
 function getTableData(tableName: string, limit = 100) {
+  if (!db) {
+    throw new Error('No database connection');
+  }
+  
   // Validate table name to prevent SQL injection
   const validTableName = tableName.replace(/[^a-zA-Z0-9_]/g, '');
   
@@ -142,6 +210,30 @@ function getTableData(tableName: string, limit = 100) {
 // Socket.IO connection handler
 io.on('connection', (socket) => {
   console.log('Client connected');
+  
+  // Send current database path when client connects
+  socket.emit('databasePath', currentDbPath);
+  
+  // Handle database path change request
+  socket.on('changeDatabase', (dbPath, callback) => {
+    try {
+      // Resolve relative paths if needed
+      const resolvedPath = path.isAbsolute(dbPath) ? dbPath : path.resolve(process.cwd(), dbPath);
+      
+      const success = connectToDatabase(resolvedPath);
+      
+      if (success) {
+        io.emit('databaseChanged');
+        io.emit('databasePathChanged', resolvedPath);
+        callback?.({ success: true, path: resolvedPath });
+      } else {
+        callback?.({ success: false, message: 'Failed to connect to database' });
+      }
+    } catch (error) {
+      console.error('Error changing database:', error);
+      callback?.({ success: false, message: String(error) });
+    }
+  });
   
   // Send list of tables when requested
   socket.on('getTables', () => {
