@@ -1,3 +1,6 @@
+> [!WARNING]
+> There's not much point in using this, [Datasette](https://datasette.io/) is a much better tool for this purpose.
+
 # SQLite Database Viewer
 
 A real-time SQLite database viewer with an interactive frontend built with TypeScript, React, and Tailwind CSS.
